@@ -2,21 +2,29 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/oleksandr/bonjour"
 )
 
 const (
-	daemonAddr = "localhost:8080"
+	daemonAddr    = "localhost:8080"
+	caddyAdminAPI = "http://localhost:2019"
 )
 
 type LocalBase struct {
@@ -41,7 +49,7 @@ func (lb *LocalBase) List() []string {
 	return domains
 }
 
-func (lb *LocalBase) Add(domain string) error {
+func (lb *LocalBase) Add(domain string, port int) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -64,6 +72,68 @@ func (lb *LocalBase) Add(domain string) error {
 
 	lb.services[domain] = s
 	log.Printf("Registered domain: %s as %s", domain, fullServiceName)
+
+	// Add Caddy server block
+	if err := addCaddyServerBlock(domain, port); err != nil {
+		s.Shutdown()
+		delete(lb.services, domain)
+		return fmt.Errorf("failed to add Caddy server block: %v", err)
+	}
+	return nil
+}
+
+func addCaddyServerBlock(domain string, port int) error {
+	config := map[string]interface{}{
+		"apps": map[string]interface{}{
+			"http": map[string]interface{}{
+				"servers": map[string]interface{}{
+					domain: map[string]interface{}{
+						"listen": []string{":80", ":443"},
+						"routes": []map[string]interface{}{
+							{
+								"match": []map[string]interface{}{
+									{"host": []string{domain}},
+								},
+								"handle": []map[string]interface{}{
+									{
+										"handler": "reverse_proxy",
+										"upstreams": []map[string]interface{}{
+											{"dial": fmt.Sprintf("localhost:%d", port)},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("%s/config/", caddyAdminAPI)
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to add Caddy server block: %s", body)
+	}
+
 	return nil
 }
 
@@ -113,6 +183,11 @@ func getLocalIP() (string, error) {
 }
 
 func runDaemon() {
+
+	if err := ensureCaddyRunning(); err != nil {
+		log.Fatalf("failed to ensure Caddy is running: %v", err)
+	}
+
 	lb := NewLocalBase()
 
 	listener, err := net.Listen("tcp", daemonAddr)
@@ -148,27 +223,36 @@ func handleConnection(conn net.Conn, lb *LocalBase) {
 		parts := strings.Fields(scanner.Text())
 		cmd := parts[0]
 		switch cmd {
-		case "add", "remove":
-			if len(parts) != 2 {
-				fmt.Fprintln(conn, "Invalid command. Usage: add/remove <domain>")
+		case "add":
+			if len(parts) != 4 || parts[2] != "--port" {
+				fmt.Fprintln(conn, "Invalid command. Usage: add <domain> --port <port>")
 				return
 			}
 			domain := parts[1]
-			if cmd == "add" {
-				err := lb.Add(domain)
-				if err != nil {
-					fmt.Fprintf(conn, "Error: %v\n", err)
-				} else {
-					fmt.Fprintf(conn, "Added domain: %s\n", domain)
-				}
-			} else {
-				err := lb.Remove(domain)
-				if err != nil {
-					fmt.Fprintf(conn, "Error: %v\n", err)
-				} else {
-					fmt.Fprintf(conn, "Removed domain: %s\n", domain)
-				}
+			port, err := strconv.Atoi(parts[3])
+			if err != nil {
+				fmt.Fprintf(conn, "Invalid port number: %v\n", err)
+				return
 			}
+			err = lb.Add(domain, port)
+			if err != nil {
+				fmt.Fprintf(conn, "Error: %v\n", err)
+			} else {
+				fmt.Fprintf(conn, "Added domain: %s with port: %d\n", domain, port)
+			}
+		case "remove":
+			if len(parts) != 2 {
+				fmt.Fprintln(conn, "Invalid command. Usage: remove <domain>")
+				return
+			}
+			domain := parts[1]
+			err := lb.Remove(domain)
+			if err != nil {
+				fmt.Fprintf(conn, "Error: %v\n", err)
+			} else {
+				fmt.Fprintf(conn, "Removed domain: %s\n", domain)
+			}
+
 		case "list":
 			domains := lb.List()
 			if len(domains) == 0 {
@@ -214,6 +298,41 @@ func sendCommand(command string) error {
 	return nil
 }
 
+// / caddy config
+func startCaddy() error {
+	cmd := exec.Command("caddy", "start")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Start()
+}
+
+func isCaddyRunning() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost:2019/config", nil)
+	if err != nil {
+		return false, err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, nil
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+func ensureCaddyRunning() error {
+	running, err := isCaddyRunning()
+	if err == nil && running {
+		log.Println("Caddy is running")
+		return nil
+	}
+	return startCaddy()
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: localbase <command> [args...]")
@@ -228,9 +347,17 @@ func main() {
 			log.Fatalf("Failed to start daemon: %v", err)
 		}
 		fmt.Println("LocalBase daemon started")
-	case "add", "remove":
+	case "add":
+		if len(os.Args) != 5 || os.Args[3] != "--port" {
+			fmt.Println("Usage: localbase add <domain> --port <port>")
+			os.Exit(1)
+		}
+		if err := sendCommand(strings.Join(os.Args[1:], " ")); err != nil {
+			log.Fatalf("Command failed: %v", err)
+		}
+	case "remove":
 		if len(os.Args) != 3 {
-			fmt.Printf("Usage: localbase %s <domain>\n", os.Args[1])
+			fmt.Println("Usage: localbase remove <domain>")
 			os.Exit(1)
 		}
 		if err := sendCommand(strings.Join(os.Args[1:], " ")); err != nil {
