@@ -198,25 +198,54 @@ func runDaemon() {
 
 	log.Println("LocalBase daemon started. Listening on", daemonAddr)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 		<-c
-		lb.Shutdown()
-		os.Exit(0)
+		cancel()
+	}()
+
+	doneChan := make(chan struct{})
+	connections := make(chan net.Conn)
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					log.Printf("Error accepting connection: %v\n", err)
+					continue
+				}
+			}
+
+			select {
+			case connections <- conn:
+			case <-ctx.Done():
+				return
+			}
+		}
 	}()
 
 	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
-			continue
+		select {
+		case conn := <-connections:
+			go handleConnection(doneChan, conn, lb)
+		case <-doneChan:
+			cancel()
+		case <-ctx.Done():
+			lb.Shutdown()
+			log.Println("Shutting down daemon")
+			return
 		}
-		go handleConnection(conn, lb)
 	}
 }
 
-func handleConnection(conn net.Conn, lb *LocalBase) {
+func handleConnection(ch chan struct{}, conn net.Conn, lb *LocalBase) {
 	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
 	if scanner.Scan() {
@@ -263,6 +292,9 @@ func handleConnection(conn net.Conn, lb *LocalBase) {
 					fmt.Fprintf(conn, "- %s\n", domain)
 				}
 			}
+		case "stop":
+			fmt.Fprintln(conn, "Shutting down localbase")
+			close(ch)
 		default:
 			fmt.Fprintln(conn, "Unknown command")
 		}
@@ -298,7 +330,6 @@ func sendCommand(command string) error {
 	return nil
 }
 
-// / caddy config
 func startCaddy() error {
 	cmd := exec.Command("caddy", "start")
 	cmd.Stdout = os.Stdout
@@ -347,6 +378,10 @@ func main() {
 			log.Fatalf("Failed to start daemon: %v", err)
 		}
 		fmt.Println("LocalBase daemon started")
+	case "stop":
+		if err := sendCommand("stop"); err != nil {
+			log.Fatalf("Command failed: %v", err)
+		}
 	case "add":
 		if len(os.Args) != 5 || os.Args[3] != "--port" {
 			fmt.Println("Usage: localbase add <domain> --port <port>")
