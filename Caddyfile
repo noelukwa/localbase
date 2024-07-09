@@ -1,7 +1,0 @@
-cloudwrench.local {
-    reverse_proxy localhost:3000
-}
-
-api.cloudwrench.local {
-    reverse_proxy localhost:8778
-}
