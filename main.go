@@ -6,208 +6,31 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
-	"github.com/oleksandr/bonjour"
+	"github.com/spf13/cobra"
 )
 
-var (
-	daemonAddr    = "localhost:8080"
-	caddyAdminAPI = "http://localhost:2019"
-)
+func run(cfg *Config) {
 
-type Record struct {
-	service string
-	host    string
-	server  *bonjour.Server
-}
-
-type LocalBase struct {
-	records map[string]*Record
-	mu      sync.Mutex
-}
-
-func NewLocalBase() *LocalBase {
-	return &LocalBase{
-		records: make(map[string]*Record),
-	}
-}
-
-func (lb *LocalBase) List() []string {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	domains := make([]string, 0, len(lb.records))
-	for domain := range lb.records {
-		domains = append(domains, domain)
-	}
-	return domains
-}
-
-func (lb *LocalBase) Add(domain string, port int) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	localIP, err := getLocalIP()
-	if err != nil {
-		log.Fatalln("Error getting local IP:", err.Error())
-	}
-	log.Println("Local IP:", localIP)
-
-	clean := strings.TrimSpace(domain)
-	fullDomain := fmt.Sprintf("%s.local", clean)
-	if _, exists := lb.records[fullDomain]; exists {
-		return fmt.Errorf("domain %s already registered", fullDomain)
-	}
-	fullHost := fmt.Sprintf("%s.", fullDomain)
-
-	service := fmt.Sprintf("_%s._tcp", clean)
-	// Register nodecrane service
-	s1, err := bonjour.RegisterProxy(
-		"localbase",
-		service,
-		"",
-		80,
-		fullHost,
-		localIP,
-		[]string{},
-		nil)
-
-	if err != nil {
-		log.Fatalln("Error registering frontend service:", err.Error())
-	}
-
-	lb.records[fullDomain] = &Record{
-		service: service,
-		host:    fullHost,
-		server:  s1,
-	}
-
-	if err := addCaddyServerBlock([]string{fullDomain}, port); err != nil {
-		s1.Shutdown()
-		delete(lb.records, domain)
-		return fmt.Errorf("failed to add Caddy server block: %v", err)
-	}
-	return nil
-}
-
-func (lb *LocalBase) Remove(domain string) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	record, exists := lb.records[domain]
-	if !exists {
-		return fmt.Errorf("domain %s not registered", domain)
-	}
-
-	record.server.Shutdown()
-	delete(lb.records, domain)
-	log.Printf("Removed domain: %s", domain)
-	return nil
-}
-
-func (lb *LocalBase) Shutdown() {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	for domain, rec := range lb.records {
-		rec.server.Shutdown()
-		log.Printf("Shutting down domain: %s", domain)
-	}
-}
-
-func (lb *LocalBase) startBroadcast(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			lb.broadcastAll()
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (lb *LocalBase) broadcastAll() {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	localIP, err := getLocalIP()
-	if err != nil {
-		log.Fatalln("Error getting local IP:", err.Error())
-	}
-
-	for domain, info := range lb.records {
-		info.server.Shutdown()
-
-		server, err := bonjour.RegisterProxy(
-			"localbase",
-			info.service,
-			"",
-			80,
-			info.host,
-			localIP,
-			[]string{},
-			nil)
-
-		if err != nil {
-			log.Fatalln("Error registering frontend service:", err.Error())
-		}
-
-		if err != nil {
-			log.Printf("Error re-registering service for %s: %v", domain, err)
-			continue
-		}
-
-		info.server = server
-	}
-}
-
-func getLocalIP() (string, error) {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "", err
-	}
-	for _, addr := range addrs {
-		var ip net.IP
-		switch v := addr.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		}
-		if ip != nil && !ip.IsLoopback() && ip.To4() != nil {
-			return ip.String(), nil
-		}
-	}
-	return "", fmt.Errorf("no suitable local IP address found")
-}
-
-func runDaemon() {
-
-	if err := ensureCaddyRunning(); err != nil {
+	if err := ensureCaddyRunning(cfg.CaddyAdmin); err != nil {
 		log.Fatalf("failed to ensure Caddy is running: %v", err)
 	}
 
 	lb := NewLocalBase()
 
-	listener, err := net.Listen("tcp", daemonAddr)
+	listener, err := net.Listen("tcp", cfg.AdminAddress)
 	if err != nil {
-		log.Fatalf("Failed to start daemon: %v", err)
+		log.Fatalf("failed to start localbase server: %v", err)
 	}
 	defer listener.Close()
 
-	log.Println("LocalBase daemon started. Listening on", daemonAddr)
+	log.Println("localBase server started. listening on", cfg.AdminAddress)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -231,7 +54,7 @@ func runDaemon() {
 				case <-ctx.Done():
 					return
 				default:
-					log.Printf("Error accepting connection: %v\n", err)
+					log.Printf("error accepting connection: %v\n", err)
 					continue
 				}
 			}
@@ -251,8 +74,8 @@ func runDaemon() {
 		case <-doneChan:
 			cancel()
 		case <-ctx.Done():
+			log.Println("shutting down localbase")
 			lb.Shutdown()
-			log.Println("Shutting down daemon")
 			return
 		}
 	}
@@ -306,7 +129,6 @@ func handleConnection(ch chan struct{}, conn net.Conn, lb *LocalBase) {
 				}
 			}
 		case "stop":
-			fmt.Fprintln(conn, "Shutting down localbase")
 			close(ch)
 		default:
 			fmt.Fprintln(conn, "Unknown command")
@@ -314,14 +136,13 @@ func handleConnection(ch chan struct{}, conn net.Conn, lb *LocalBase) {
 	}
 }
 
-func startDaemon() error {
-	cmd := exec.Command(os.Args[0], "daemon")
-	cmd.Start()
-	return nil
-}
-
 func sendCommand(command string) error {
-	conn, err := net.Dial("tcp", daemonAddr)
+	cfg, err := readConfig()
+	if err != nil {
+		return err
+	}
+
+	conn, err := net.Dial("tcp", cfg.AdminAddress)
 	if err != nil {
 		return fmt.Errorf("failed to connect to daemon: %v", err)
 	}
@@ -343,80 +164,115 @@ func sendCommand(command string) error {
 	return nil
 }
 
-func startCaddy() error {
-	cmd := exec.Command("caddy", "start")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Start()
+var rootCmd = &cobra.Command{
+	Use:   "localbase",
+	Short: "localBase is a local domain management tool",
+	Long: `localBase allows you to manage local domains and their corresponding ports.
+It integrates with Caddy server to provide local domain resolution and routing.`,
 }
 
-func isCaddyRunning() (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost:2019/config", nil)
-	if err != nil {
-		return false, err
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, nil
-	}
-	defer resp.Body.Close()
-
-	return resp.StatusCode == http.StatusOK, nil
+var addCmd = &cobra.Command{
+	Use:   "add <domain> --port <port>",
+	Short: "add a new domain",
+	Long:  `add a new domain to LocalBase with the specified port.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return fmt.Errorf("usage: localbase add <domain> --port <port>")
+		}
+		port, _ := cmd.Flags().GetInt("port")
+		if port == 0 {
+			return fmt.Errorf("port is required")
+		}
+		return sendCommand(fmt.Sprintf("add %s --port %d", args[0], port))
+	},
 }
 
-func ensureCaddyRunning() error {
-	running, err := isCaddyRunning()
-	if err == nil && running {
-		log.Println("Caddy is running")
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "start the localbase",
+	Long:  `start the localbase,either in the foreground or as a detached process.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		caddyAdmin, _ := cmd.Flags().GetString("caddy")
+		adminAddr, _ := cmd.Flags().GetInt("addr")
+		detached, _ := cmd.Flags().GetBool("detached")
+
+		cfg := &Config{
+			AdminAddress: fmt.Sprintf(":%d", adminAddr),
+			CaddyAdmin:   caddyAdmin,
+		}
+
+		if err := saveConfig(cfg); err != nil {
+			return fmt.Errorf("failed to save config: %v", err)
+		}
+
+		if detached {
+			cmd := exec.Command(os.Args[0], "start")
+			cmd.Stdout = nil
+			cmd.Stderr = nil
+			cmd.Stdin = nil
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("failed to start in detached mode: %v", err)
+			}
+
+			return nil
+		}
+
+		run(cfg)
 		return nil
+	},
+}
+
+func stopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop localbase daemon",
+		Long:  `Stop the running localbase daemon.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return sendCommand("stop")
+		},
 	}
-	return startCaddy()
+}
+
+func removeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <domain>",
+		Short: "Remove a domain",
+		Long:  `Remove a domain from LocalBase.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return fmt.Errorf("usage: localbase remove <domain>")
+			}
+			return sendCommand(fmt.Sprintf("remove %s", args[0]))
+		},
+	}
+}
+
+func listCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all domains",
+		Long:  `List all domains registered in LocalBase.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return sendCommand("list")
+		},
+	}
+}
+
+func init() {
+	rootCmd.AddCommand(addCmd)
+	addCmd.Flags().IntP("port", "p", 0, "port for the .local domain")
+	rootCmd.AddCommand(startCmd)
+	startCmd.Flags().IntP("addr", "a", 2025, "localbase process address")
+	startCmd.Flags().StringP("caddy", "c", "http://localhost:2019", "local caddy admin address")
+	startCmd.Flags().BoolP("detached", "d", false, "run localbase in background")
+	rootCmd.AddCommand(stopCmd())
+	rootCmd.AddCommand(removeCmd())
+	rootCmd.AddCommand(listCmd())
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: localbase <command> [args...]")
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case "daemon":
-		runDaemon()
-	case "start":
-		if err := startDaemon(); err != nil {
-			log.Fatalf("Failed to start daemon: %v", err)
-		}
-		fmt.Println("LocalBase daemon started")
-	case "stop":
-		if err := sendCommand("stop"); err != nil {
-			log.Fatalf("Command failed: %v", err)
-		}
-	case "add":
-		if len(os.Args) != 5 || os.Args[3] != "--port" {
-			fmt.Println("Usage: localbase add <domain> --port <port>")
-			os.Exit(1)
-		}
-		if err := sendCommand(strings.Join(os.Args[1:], " ")); err != nil {
-			log.Fatalf("Command failed: %v", err)
-		}
-	case "remove":
-		if len(os.Args) != 3 {
-			fmt.Println("Usage: localbase remove <domain>")
-			os.Exit(1)
-		}
-		if err := sendCommand(strings.Join(os.Args[1:], " ")); err != nil {
-			log.Fatalf("Command failed: %v", err)
-		}
-	case "list":
-		if err := sendCommand("list"); err != nil {
-			log.Fatalf("Command failed: %v", err)
-		}
-	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
-		os.Exit(1)
+	if err := rootCmd.Execute(); err != nil {
+		log.Fatalf("[localbase]: %v", err)
 	}
 }

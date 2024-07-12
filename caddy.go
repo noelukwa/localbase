@@ -2,14 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
-func getCaddyConfig() (map[string]interface{}, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/config/", caddyAdminAPI))
+func getCaddyConfig(caddyAdmin string) (map[string]interface{}, error) {
+	resp, err := http.Get(fmt.Sprintf("%s/config/", caddyAdmin))
 	if err != nil {
 		return nil, err
 	}
@@ -28,8 +30,8 @@ func getCaddyConfig() (map[string]interface{}, error) {
 	return config, nil
 }
 
-func addCaddyServerBlock(domains []string, port int) error {
-	config, err := getCaddyConfig()
+func addCaddyServerBlock(domains []string, port int, caddyAdmin string) error {
+	config, err := getCaddyConfig(caddyAdmin)
 	if err != nil {
 		return err
 	}
@@ -106,7 +108,7 @@ func addCaddyServerBlock(domains []string, port int) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/config/", caddyAdminAPI)
+	url := fmt.Sprintf("%s/config/", caddyAdmin)
 	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
@@ -126,4 +128,30 @@ func addCaddyServerBlock(domains []string, port int) error {
 	}
 
 	return nil
+}
+
+func isCaddyRunning(caddyAdmin string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/config/", caddyAdmin), nil)
+	if err != nil {
+		return false, err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, nil
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+func ensureCaddyRunning(caddyAdmin string) error {
+	running, err := isCaddyRunning(caddyAdmin)
+	if err == nil && running {
+		return nil
+	}
+	return fmt.Errorf("ensure caddy is installed and running")
 }
