@@ -2,11 +2,8 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -22,19 +19,25 @@ import (
 	"github.com/oleksandr/bonjour"
 )
 
-const (
+var (
 	daemonAddr    = "localhost:8080"
 	caddyAdminAPI = "http://localhost:2019"
 )
 
+type Record struct {
+	service string
+	host    string
+	server  *bonjour.Server
+}
+
 type LocalBase struct {
-	services map[string]*bonjour.Server
-	mu       sync.Mutex
+	records map[string]*Record
+	mu      sync.Mutex
 }
 
 func NewLocalBase() *LocalBase {
 	return &LocalBase{
-		services: make(map[string]*bonjour.Server),
+		records: make(map[string]*Record),
 	}
 }
 
@@ -42,8 +45,8 @@ func (lb *LocalBase) List() []string {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	domains := make([]string, 0, len(lb.services))
-	for domain := range lb.services {
+	domains := make([]string, 0, len(lb.records))
+	for domain := range lb.records {
 		domains = append(domains, domain)
 	}
 	return domains
@@ -53,87 +56,46 @@ func (lb *LocalBase) Add(domain string, port int) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	if _, exists := lb.services[domain]; exists {
-		return fmt.Errorf("domain %s already registered", domain)
-	}
-
 	localIP, err := getLocalIP()
 	if err != nil {
-		return err
+		log.Fatalln("Error getting local IP:", err.Error())
 	}
+	log.Println("Local IP:", localIP)
 
-	serviceName := strings.TrimSuffix(domain, ".local")
-	fullServiceName := fmt.Sprintf("%s._http._tcp.local.", serviceName)
+	clean := strings.TrimSpace(domain)
+	fullDomain := fmt.Sprintf("%s.local", clean)
+	if _, exists := lb.records[fullDomain]; exists {
+		return fmt.Errorf("domain %s already registered", fullDomain)
+	}
+	fullHost := fmt.Sprintf("%s.", fullDomain)
 
-	s, err := bonjour.RegisterProxy(fullServiceName, "_http._tcp", "", 80, serviceName, localIP, []string{"txtv=1", "app=localbase"}, nil)
+	service := fmt.Sprintf("_%s._tcp", clean)
+	// Register nodecrane service
+	s1, err := bonjour.RegisterProxy(
+		"localbase",
+		service,
+		"",
+		80,
+		fullHost,
+		localIP,
+		[]string{},
+		nil)
+
 	if err != nil {
-		return err
+		log.Fatalln("Error registering frontend service:", err.Error())
 	}
 
-	lb.services[domain] = s
-	log.Printf("Registered domain: %s as %s", domain, fullServiceName)
+	lb.records[fullDomain] = &Record{
+		service: service,
+		host:    fullHost,
+		server:  s1,
+	}
 
-	// Add Caddy server block
-	if err := addCaddyServerBlock(domain, port); err != nil {
-		s.Shutdown()
-		delete(lb.services, domain)
+	if err := addCaddyServerBlock([]string{fullDomain}, port); err != nil {
+		s1.Shutdown()
+		delete(lb.records, domain)
 		return fmt.Errorf("failed to add Caddy server block: %v", err)
 	}
-	return nil
-}
-
-func addCaddyServerBlock(domain string, port int) error {
-	config := map[string]interface{}{
-		"apps": map[string]interface{}{
-			"http": map[string]interface{}{
-				"servers": map[string]interface{}{
-					domain: map[string]interface{}{
-						"listen": []string{":80", ":443"},
-						"routes": []map[string]interface{}{
-							{
-								"match": []map[string]interface{}{
-									{"host": []string{domain}},
-								},
-								"handle": []map[string]interface{}{
-									{
-										"handler": "reverse_proxy",
-										"upstreams": []map[string]interface{}{
-											{"dial": fmt.Sprintf("localhost:%d", port)},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	jsonData, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-
-	url := fmt.Sprintf("%s/config/", caddyAdminAPI)
-	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to add Caddy server block: %s", body)
-	}
-
 	return nil
 }
 
@@ -141,13 +103,13 @@ func (lb *LocalBase) Remove(domain string) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	s, exists := lb.services[domain]
+	record, exists := lb.records[domain]
 	if !exists {
 		return fmt.Errorf("domain %s not registered", domain)
 	}
 
-	s.Shutdown()
-	delete(lb.services, domain)
+	record.server.Shutdown()
+	delete(lb.records, domain)
 	log.Printf("Removed domain: %s", domain)
 	return nil
 }
@@ -156,9 +118,58 @@ func (lb *LocalBase) Shutdown() {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	for domain, s := range lb.services {
-		s.Shutdown()
+	for domain, rec := range lb.records {
+		rec.server.Shutdown()
 		log.Printf("Shutting down domain: %s", domain)
+	}
+}
+
+func (lb *LocalBase) startBroadcast(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			lb.broadcastAll()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (lb *LocalBase) broadcastAll() {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	localIP, err := getLocalIP()
+	if err != nil {
+		log.Fatalln("Error getting local IP:", err.Error())
+	}
+
+	for domain, info := range lb.records {
+		info.server.Shutdown()
+
+		server, err := bonjour.RegisterProxy(
+			"localbase",
+			info.service,
+			"",
+			80,
+			info.host,
+			localIP,
+			[]string{},
+			nil)
+
+		if err != nil {
+			log.Fatalln("Error registering frontend service:", err.Error())
+		}
+
+		if err != nil {
+			log.Printf("Error re-registering service for %s: %v", domain, err)
+			continue
+		}
+
+		info.server = server
 	}
 }
 
@@ -199,6 +210,8 @@ func runDaemon() {
 	log.Println("LocalBase daemon started. Listening on", daemonAddr)
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	go lb.startBroadcast(ctx)
 
 	go func() {
 		c := make(chan os.Signal, 1)
