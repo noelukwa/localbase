@@ -64,53 +64,10 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: "1.21"
-      - name: Install GoReleaser
+      - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:
-          install-only: true
-      - name: Run GoReleaser
-        run: goreleaser release --clean
+          version: latest
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-macos:
-    name: Build macOS (Intel and Apple Silicon)
-    needs: test
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-      - name: Build for macOS (Intel)
-        run: GOOS=darwin GOARCH=amd64 go build -o localbase-darwin-amd64
-      - name: Build for macOS (Apple Silicon)
-        run: GOOS=darwin GOARCH=arm64 go build -o localbase-darwin-arm64
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: macos-binaries
-          path: |
-            localbase-darwin-amd64
-            localbase-darwin-arm64
-
-  build-linux:
-    name: Build Linux
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-      - name: Build for Linux
-        run: GOOS=linux GOARCH=amd64 go build -o localbase-linux-amd64
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: linux-binary
-          path: localbase-linux-amd64
