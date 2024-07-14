@@ -75,21 +75,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.SHIP_TOKEN }}
-
-      - name: Update install.sh
-        run: |
-          sed -i 's/VERSION="v0.0.0"/VERSION="${{ github.ref_name }}"/g' install.sh
-
-      - name: Commit updated install.sh
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git checkout main
-          git add .
-          git add install.sh
-          git commit -m "Update install.sh for version ${{ github.ref_name }}" || echo "No changes to commit"
-          git push origin main
-        env:
-          GITHUB_TOKEN: ${{ secrets.SHIP_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}

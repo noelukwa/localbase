@@ -1,9 +1,6 @@
 #!/bin/sh
 set -e
 
-# This script will be updated automatically during the release process.
-# Do not modify it manually.
-
 # Determine architecture
 ARCH=$(uname -m)
 case $ARCH in
@@ -30,14 +27,14 @@ case $OS in
         ;;
 esac
 
-# Placeholder for the latest version
-VERSION="v0.0.0"
+# Fetch the latest version tag from GitHub API
+LATEST_VERSION=$(curl -s https://api.github.com/repos/noelukwa/localblade/releases/latest | grep 'tag_name' | cut -d\" -f4)
 
 # Construct download URL
-DOWNLOAD_URL="https://github.com/noelukwa/localblade/releases/download/${VERSION}/localbase_${OS}_${ARCH}.tar.gz"
+DOWNLOAD_URL="https://github.com/noelukwa/localblade/releases/download/${LATEST_VERSION}/localbase_${OS}_${ARCH}.tar.gz"
 
 # Download and install
-echo "Downloading Localbase ${VERSION} for ${OS} ${ARCH}..."
+echo "Downloading Localbase ${LATEST_VERSION} for ${OS} ${ARCH}..."
 curl -L -o localbase.tar.gz $DOWNLOAD_URL
 tar -xzf localbase.tar.gz
 sudo mv localbase /usr/local/bin/
