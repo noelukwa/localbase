@@ -1,60 +1,9 @@
-# This is an example .goreleaser.yml file with some sensible defaults.
-# Make sure to check the documentation at https://goreleaser.com
 version: 2
 
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
-    # Create install script
-    - |
-      cat > install.sh << EOL
-      #!/bin/sh
-      set -e
-
-      # Determine architecture
-      ARCH=$(uname -m)
-      case $ARCH in
-          x86_64)
-              ARCH="amd64"
-              ;;
-          arm64|aarch64)
-              ARCH="arm64"
-              ;;
-          *)
-              echo "Unsupported architecture: $ARCH"
-              exit 1
-              ;;
-      esac
-
-      # Determine OS
-      OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-      case $OS in
-          linux|darwin)
-              ;;
-          *)
-              echo "Unsupported operating system: $OS"
-              exit 1
-              ;;
-      esac
-
-      # Determine latest version
-      VERSION=$(curl -s https://api.github.com/repos/noelukwa/localblade/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-      # Construct download URL
-      DOWNLOAD_URL="https://github.com/noelukwa/localblade/releases/download/${VERSION}/localbase_${OS}_${ARCH}.tar.gz"
-
-      # Download and install
-      echo "Downloading Localbase ${VERSION} for ${OS} ${ARCH}..."
-      curl -L -o localbase.tar.gz $DOWNLOAD_URL
-      tar -xzf localbase.tar.gz
-      sudo mv localbase /usr/local/bin/
-      rm localbase.tar.gz
-
-      echo "Localbase has been installed to /usr/local/bin/localbase"
-      echo "You can now run 'localbase' from anywhere in your terminal."
-      EOL
-      chmod +x install.sh
+    - sed -i 's/VERSION="v0.0.0"/VERSION="{{.Version}}"/g' install.sh
 
 builds:
   - env:
@@ -73,7 +22,6 @@ builds:
 
 archives:
   - format: tar.gz
-    # this name template makes the OS and Arch compatible with the results of uname.
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -81,14 +29,9 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
     format_overrides:
     - goos: windows
       format: zip
-    files:
-      - src: 'install.sh'
-        dst: '.'
-        strip_parent: true
 
 checksum:
   name_template: 'checksums.txt'
