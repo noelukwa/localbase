@@ -15,10 +15,12 @@ go install github.com/noelukwa/localbase@latest
 ```
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/noelukwa/localblade/main/install.sh | sudo sh
+curl -sSL https://raw.githubusercontent.com/noelukwa/localbase/main/install.sh | sudo sh
 ```
 
 ## usage
+
+✨ _ensure caddy is setup and running_
 
 add a new domain:
 
@@ -38,10 +40,16 @@ list all configured domains:
 localbase list
 ```
 
-start the localbase service:
+start the localbase service in foreground:
 
 ```sh
 localbase start
+```
+
+start the localbase service in detached mode:
+
+```sh
+localbase start -d
 ```
 
 stop the localbase service:
