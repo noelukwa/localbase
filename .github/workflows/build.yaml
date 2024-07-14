@@ -85,7 +85,7 @@ jobs:
           git checkout ${{ steps.get_branch.outputs.branch_name }}
           git add install.sh
           git commit -m "Update install.sh for version ${{ github.ref_name }}" || echo "No changes to commit"
-          git push origin HEAD:${{ steps.get_branch.outputs.branch_name }}
+          git push priv HEAD:main
         env:
           GITHUB_TOKEN: ${{ secrets.SHIP_TOKEN }}
       - name: Run GoReleaser
