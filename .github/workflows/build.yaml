@@ -2,6 +2,8 @@ name: Build, Test, and Release
 
 on:
   push:
+    branches:
+      - main # or your default branch name
     tags:
       - "v*"
     paths-ignore:
@@ -69,5 +71,6 @@ jobs:
         with:
           version: latest
           args: release --clean
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
