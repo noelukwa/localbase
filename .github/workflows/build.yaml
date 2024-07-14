@@ -72,15 +72,22 @@ jobs:
           version: latest
           args: release --clean
         if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GITHUB_TOKEN: ${{ secrets.SHIP_TOKEN }}
+      - name: Get branch name
+        id: get_branch
+        run: |
+          if [ "${{ github.ref_type }}" == "branch" ]; then
+            echo "::set-output name=branch_name::${{ github.ref_name }}"
+          else
+            echo "::set-output name=branch_name::$(echo ${{ github.ref }} | sed -n 's|refs/heads/||p')"
+          fi
       - name: Commit updated install.sh
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          git checkout ${{ steps.get_branch.outputs.branch_name }}
           git add install.sh
           git commit -m "Update install.sh for version ${{ github.ref_name }}" || echo "No changes to commit"
-          git push
+          git push origin ${{ steps.get_branch.outputs.branch_name }}
         env:
-          GITHUB_TOKEN: ${{  secrets.SHIP_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SHIP_TOKEN }}
