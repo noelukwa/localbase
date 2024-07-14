@@ -85,7 +85,9 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          git stash
           git checkout main
+          git stash pop
           git add install.sh
           git commit -m "Update install.sh for version ${{ github.ref_name }}" || echo "No changes to commit"
           git push origin main
