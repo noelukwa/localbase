@@ -22,24 +22,6 @@ curl -sSL https://raw.githubusercontent.com/noelukwa/localbase/main/install.sh |
 
 ✨ _ensure caddy is setup and running_
 
-add a new domain:
-
-```sh
-localbase add example.local --port 3000
-```
-
-remove a domain:
-
-```sh
-localbase remove example.local
-```
-
-list all configured domains:
-
-```sh
-localbase list
-```
-
 start the localbase service in foreground:
 
 ```sh
@@ -50,6 +32,26 @@ start the localbase service in detached mode:
 
 ```sh
 localbase start -d
+```
+
+add a new domain:
+
+```sh
+localbase add hello --port 3000
+```
+
+✨ now visit [https://hello.local](https://hello.local)
+
+remove a domain:
+
+```sh
+localbase remove hello
+```
+
+list all configured domains:
+
+```sh
+localbase list
 ```
 
 stop the localbase service:
