@@ -36,22 +36,22 @@ jobs:
           export PATH="$PATH:$HOME/.local/bin"
       - name: Start Caddy
         run: caddy run &
-      - name: Build localbase
-        run: go build -o localbase
-      - name: Start localbase
-        run: ./localbase start -d
+      - name: Build localblade
+        run: go build -o localblade
+      - name: Start localblade
+        run: ./localblade start -d
       - name: Create HTTP Server
         run: |
           echo "<html><body><h1>Hello, World!</h1></body></html>" > index.html
           python3 -m http.server 5000 &
       - name: Register Domain with LocalBase
-        run: ./localbase add webapp --port 5000
+        run: ./localblade add webapp --port 5000
         continue-on-error: true
       - name: Ping Registered Domain
         run: |
           curl -H "Host: webapp.local" http://localhost:5000
       - name: Stop LocalBase
-        run: ./localbase stop
+        run: ./localblade stop
 
   build-and-release:
     name: Build and Release
