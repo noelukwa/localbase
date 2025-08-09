@@ -85,10 +85,10 @@ func readConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-func getLocalIP() (string, error) {
+func getLocalIP() (net.IP, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, addr := range addrs {
 		var ip net.IP
@@ -99,8 +99,8 @@ func getLocalIP() (string, error) {
 			ip = v.IP
 		}
 		if ip != nil && !ip.IsLoopback() && ip.To4() != nil {
-			return ip.String(), nil
+			return ip, nil
 		}
 	}
-	return "", fmt.Errorf("no suitable local IP address found")
+	return nil, fmt.Errorf("no suitable local IP address found")
 }

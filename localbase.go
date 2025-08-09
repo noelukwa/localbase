@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -14,45 +14,68 @@ import (
 type Record struct {
 	service string
 	host    string
+	port    int
 	server  *bonjour.Server
-}
-
-type LocalBase struct {
-	records map[string]*Record
 	mu      sync.Mutex
 }
 
-func NewLocalBase() *LocalBase {
-	return &LocalBase{
-		records: make(map[string]*Record),
-	}
+type LocalBase struct {
+	records       map[string]*Record
+	mu            sync.RWMutex
+	logger        Logger
+	configManager ConfigManager
+	caddyClient   CaddyClient
+	validator     Validator
+	localIP       net.IP
+	ipMu          sync.RWMutex
 }
 
-func (lb *LocalBase) List() []string {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+func NewLocalBase(logger Logger, configManager ConfigManager, caddyClient CaddyClient, validator Validator) (*LocalBase, error) {
+	localIP, err := getLocalIP()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get local IP: %w", err)
+	}
+	
+	return &LocalBase{
+		records:       make(map[string]*Record),
+		logger:        logger,
+		configManager: configManager,
+		caddyClient:   caddyClient,
+		validator:     validator,
+		localIP:       localIP,
+	}, nil
+}
+
+func (lb *LocalBase) List(ctx context.Context) ([]string, error) {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
 
 	domains := make([]string, 0, len(lb.records))
 	for domain := range lb.records {
 		domains = append(domains, domain)
 	}
-	return domains
+	return domains, nil
 }
 
-func (lb *LocalBase) Add(domain string, port int) error {
+func (lb *LocalBase) Add(ctx context.Context, domain string, port int) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	config, err := readConfig()
-	if err != nil {
-		return err
+	// Validate inputs first
+	if err := lb.validator.ValidateDomain(domain); err != nil {
+		return fmt.Errorf("domain validation failed: %w", err)
+	}
+	
+	if err := lb.validator.ValidatePort(port); err != nil {
+		return fmt.Errorf("port validation failed: %w", err)
 	}
 
-	localIP, err := getLocalIP()
-	if err != nil {
-		log.Fatalln("Error getting local IP:", err.Error())
-	}
-	log.Println("Local IP:", localIP)
+	// Get current IP
+	lb.ipMu.RLock()
+	localIP := lb.localIP
+	lb.ipMu.RUnlock()
+	
+	lb.logger.Debug("using local IP", Field{"ip", localIP.String()})
 
 	clean := strings.TrimSpace(domain)
 	fullDomain := fmt.Sprintf("%s.local", clean)
@@ -69,29 +92,30 @@ func (lb *LocalBase) Add(domain string, port int) error {
 		"",
 		80,
 		fullHost,
-		localIP,
+		localIP.String(),
 		[]string{},
 		nil)
 
 	if err != nil {
-		log.Fatalln("Error registering frontend service:", err.Error())
+		return fmt.Errorf("failed to register mDNS service: %w", err)
 	}
 
 	lb.records[fullDomain] = &Record{
 		service: service,
 		host:    fullHost,
+		port:    port,
 		server:  s1,
 	}
 
-	if err := addCaddyServerBlock([]string{fullDomain}, port, config.CaddyAdmin); err != nil {
+	if err := lb.caddyClient.AddServerBlock(ctx, []string{fullDomain}, port); err != nil {
 		s1.Shutdown()
-		delete(lb.records, domain)
-		return fmt.Errorf("failed to add Caddy server block: %v", err)
+		delete(lb.records, fullDomain)
+		return fmt.Errorf("failed to add Caddy server block: %w", err)
 	}
 	return nil
 }
 
-func (lb *LocalBase) Remove(domain string) error {
+func (lb *LocalBase) Remove(ctx context.Context, domain string) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -100,20 +124,51 @@ func (lb *LocalBase) Remove(domain string) error {
 		return fmt.Errorf("domain %s not registered", domain)
 	}
 
-	record.server.Shutdown()
+	record.mu.Lock()
+	if record.server != nil {
+		record.server.Shutdown()
+	}
+	record.mu.Unlock()
+
+	// Remove Caddy server block
+	if err := lb.caddyClient.RemoveServerBlock(ctx, []string{domain}); err != nil {
+		lb.logger.Error("failed to remove Caddy server block", Field{"domain", domain}, Field{"error", err.Error()})
+		// Continue with cleanup even if Caddy removal fails
+	}
+	
 	delete(lb.records, domain)
-	log.Printf("Removed domain: %s", domain)
+	lb.logger.Info("removed domain", Field{"domain", domain})
 	return nil
 }
 
-func (lb *LocalBase) Shutdown() {
+func (lb *LocalBase) Shutdown(ctx context.Context) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
+	var errors []error
+	
+	// Shutdown all mDNS services
 	for domain, rec := range lb.records {
-		rec.server.Shutdown()
-		log.Printf("Shutting down domain: %s", domain)
+		rec.mu.Lock()
+		if rec.server != nil {
+			rec.server.Shutdown()
+		}
+		rec.mu.Unlock()
+		lb.logger.Info("shutting down domain", Field{"domain", domain})
 	}
+
+	// Clear all Caddy server blocks
+	if err := lb.caddyClient.ClearAllServerBlocks(ctx); err != nil {
+		lb.logger.Error("failed to clear Caddy server blocks during shutdown", Field{"error", err.Error()})
+		errors = append(errors, fmt.Errorf("failed to clear Caddy server blocks: %w", err))
+	} else {
+		lb.logger.Info("cleared all Caddy server blocks during shutdown")
+	}
+	
+	if len(errors) > 0 {
+		return fmt.Errorf("shutdown errors: %v", errors)
+	}
+	return nil
 }
 
 func (lb *LocalBase) startBroadcast(ctx context.Context) {
@@ -134,33 +189,52 @@ func (lb *LocalBase) broadcastAll() {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	localIP, err := getLocalIP()
+	// Update local IP if changed
+	newIP, err := getLocalIP()
 	if err != nil {
-		log.Fatalln("Error getting local IP:", err.Error())
+		lb.logger.Error("failed to get local IP during broadcast", Field{"error", err})
+		return
 	}
+	
+	lb.ipMu.Lock()
+	lb.localIP = newIP
+	lb.ipMu.Unlock()
 
 	for domain, info := range lb.records {
-		info.server.Shutdown()
+		// Create new record to avoid race condition
+		newRecord := &Record{
+			service: info.service,
+			host:    info.host,
+			port:    info.port,
+		}
+		
+		// Shutdown old server
+		info.mu.Lock()
+		if info.server != nil {
+			info.server.Shutdown()
+		}
+		info.mu.Unlock()
 
+		// Register new server
 		server, err := bonjour.RegisterProxy(
 			"localbase",
-			info.service,
+			newRecord.service,
 			"",
 			80,
-			info.host,
-			localIP,
+			newRecord.host,
+			newIP.String(),
 			[]string{},
 			nil)
 
 		if err != nil {
-			log.Fatalln("Error registering frontend service:", err.Error())
-		}
-
-		if err != nil {
-			log.Printf("Error re-registering service for %s: %v", domain, err)
+			lb.logger.Error("failed to re-register service",
+				Field{"domain", domain},
+				Field{"error", err})
 			continue
 		}
 
-		info.server = server
+		// Update record with new server
+		newRecord.server = server
+		lb.records[domain] = newRecord
 	}
 }
