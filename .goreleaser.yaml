@@ -87,22 +87,23 @@ release:
     
     **Full Changelog**: https://github.com/noelukwa/localbase/compare/{{.PreviousTag}}...{{.Tag}}
 
-brews:
-  - name: localbase
-    repository:
-      owner: noelukwa
-      name: homebrew-tap
-    directory: Formula
-    homepage: https://github.com/noelukwa/localbase
-    description: "A secure, lightweight tool for provisioning .local domains with automatic HTTPS support"
-    license: MIT
-    test: |
-      system "#{bin}/localbase version"
-    install: |
-      bin.install "localbase"
+# Homebrew removed - will add when homebrew tap is created
+# brews:
+#   - name: localbase
+#     repository:
+#       owner: noelukwa
+#       name: homebrew-tap
+#     directory: Formula
+#     homepage: https://github.com/noelukwa/localbase
+#     description: "A secure, lightweight tool for provisioning .local domains with automatic HTTPS support"
+#     license: MIT
+#     test: |
+#       system "#{bin}/localbase version"
+#     install: |
+#       bin.install "localbase"
 
 # Package managers removed - overkill for local dev tool
-# Developers can use: brew, go install, or direct binary download
+# Developers can use: go install, or direct binary download
     
 # Docker removed - LocalBase requires host network access for mDNS/.local domains
 # and direct interaction with host's Caddy server, making containerization impractical

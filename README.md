@@ -24,11 +24,11 @@ A secure, lightweight tool for provisioning .local domains with automatic HTTPS 
 curl -sSL https://raw.githubusercontent.com/noelukwa/localbase/main/install.sh | sudo sh
 ```
 
-### 🍺 Homebrew
+### 🍺 Homebrew (Coming Soon)
 
 ```bash
-brew tap noelukwa/tap
-brew install localbase
+# Homebrew support coming soon
+# For now, use quick install or binary download
 ```
 
 ### 💾 Binary Download
