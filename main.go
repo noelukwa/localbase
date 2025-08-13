@@ -164,7 +164,7 @@ var versionCmd = &cobra.Command{
 				version = info.Main.Version
 			}
 		}
-		
+
 		fmt.Printf("LocalBase %s\n", version)
 		fmt.Printf("  commit: %s\n", commit)
 		fmt.Printf("  built: %s\n", date)

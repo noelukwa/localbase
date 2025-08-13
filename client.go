@@ -225,6 +225,11 @@ func (c *CaddyClientImpl) AddServerBlock(ctx context.Context, domains []string, 
 		return fmt.Errorf("failed to get current config: %w", err)
 	}
 
+	// Initialize config if nil
+	if config == nil {
+		config = make(map[string]any)
+	}
+
 	// Navigate to or create the necessary structure
 	apps, ok := config["apps"].(map[string]any)
 	if !ok {
