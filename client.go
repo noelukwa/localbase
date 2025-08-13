@@ -562,5 +562,7 @@ func (m *spinnerModel) View() string {
 	return spinnerStyle.Render(frame) + " Starting Caddy server..."
 }
 
-type tickMsg struct{}
-type doneMsg struct{ err error }
+type (
+	tickMsg struct{}
+	doneMsg struct{ err error }
+)

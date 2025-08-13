@@ -18,8 +18,6 @@ var (
 	builtBy = "unknown"
 )
 
-
-
 // CLI Commands
 var rootCmd = &cobra.Command{
 	Use:   "localbase",

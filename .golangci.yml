@@ -17,16 +17,11 @@ linters-settings:
     min-complexity: 15
     
   govet:
-    check-shadowing: true
+    enable:
+      - shadow
     
   misspell:
     locale: US
-    
-  unparam:
-    check-exported: false
-    
-  unused:
-    check-exported: false
     
   gocritic:
     enabled-tags:
@@ -77,13 +72,7 @@ linters:
     - wastedassign     # Find assignments to existing variables that are not used
     
   disable:
-    - deadcode         # Deprecated
-    - varcheck         # Deprecated
-    - structcheck      # Deprecated
-    - golint           # Deprecated
-    - interfacer       # Deprecated
-    - scopelint        # Deprecated
-    - maligned         # Deprecated
+    # No linters to disable
 
 # Issues configuration
 issues:
@@ -126,7 +115,7 @@ issues:
 
 # Output configuration
 output:
-  format: colored-line-number
+  formats:
+    - format: colored-line-number
   print-issued-lines: true
   print-linter-name: true
-  uniq-by-line: true

@@ -17,7 +17,6 @@ import (
 	"github.com/hashicorp/mdns"
 )
 
-
 // ConfigManager handles configuration persistence
 type ConfigManager struct {
 	logger Logger
@@ -67,7 +66,7 @@ func (c *ConfigManager) GetConfigPath() (string, error) {
 	}
 
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -97,7 +96,7 @@ func (c *ConfigManager) Read() (*Config, error) {
 	}
 
 	// Read config file if it exists
-	data, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(configFile) // #nosec G304 - config file path is controlled
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Return default config if file doesn't exist
@@ -154,15 +153,15 @@ func (c *ConfigManager) Write(config *Config) error {
 
 // LocalBase implements the core domain management functionality
 type LocalBase struct {
-	logger        Logger
-	caddyClient   CaddyClient
-	validator     Validator
-	domainsmu     sync.RWMutex
-	domains       map[string]*domainEntry
-	mdnsServers   map[string]*mdns.Server
-	mdnsMu        sync.RWMutex
-	localIP       net.IP
-	ipMu          sync.RWMutex
+	logger      Logger
+	caddyClient CaddyClient
+	validator   Validator
+	domainsmu   sync.RWMutex
+	domains     map[string]*domainEntry
+	mdnsServers map[string]*mdns.Server
+	mdnsMu      sync.RWMutex
+	localIP     net.IP
+	ipMu        sync.RWMutex
 }
 
 type domainEntry struct {
@@ -170,19 +169,19 @@ type domainEntry struct {
 }
 
 // NewLocalBase creates a new LocalBase instance
-func NewLocalBase(logger Logger, configManager *ConfigManager, caddyClient CaddyClient, validator Validator) (*LocalBase, error) {
+func NewLocalBase(logger Logger, _ *ConfigManager, caddyClient CaddyClient, validator Validator) (*LocalBase, error) {
 	localIP, err := getLocalIP()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get local IP: %w", err)
 	}
 
 	return &LocalBase{
-		logger:        logger,
-		caddyClient:   caddyClient,
-		validator:     validator,
-		domains:       make(map[string]*domainEntry),
-		mdnsServers:   make(map[string]*mdns.Server),
-		localIP:       localIP,
+		logger:      logger,
+		caddyClient: caddyClient,
+		validator:   validator,
+		domains:     make(map[string]*domainEntry),
+		mdnsServers: make(map[string]*mdns.Server),
+		localIP:     localIP,
 	}, nil
 }
 
@@ -198,7 +197,7 @@ func (l *LocalBase) Add(ctx context.Context, domain string, port int) error {
 
 	// Ensure domain ends with .local
 	if !strings.HasSuffix(domain, ".local") {
-		domain = domain + ".local"
+		domain += ".local"
 	}
 
 	// Check if already registered
@@ -234,7 +233,7 @@ func (l *LocalBase) Add(ctx context.Context, domain string, port int) error {
 func (l *LocalBase) Remove(ctx context.Context, domain string) error {
 	// Ensure domain ends with .local
 	if !strings.HasSuffix(domain, ".local") {
-		domain = domain + ".local"
+		domain += ".local"
 	}
 
 	// Check if registered
@@ -458,7 +457,7 @@ func (v *DomainValidator) ValidateDomain(domain string) error {
 	// Split domain into labels and validate each
 	labels := strings.Split(domain, ".")
 	for _, label := range labels {
-		if len(label) == 0 {
+		if label == "" {
 			return fmt.Errorf("domain contains empty label")
 		}
 		if len(label) > 63 {

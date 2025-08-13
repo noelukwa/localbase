@@ -151,11 +151,11 @@ func (s *Server) acceptConnections(ctx context.Context) {
 			s.mu.RLock()
 			listener := s.listener
 			s.mu.RUnlock()
-			
+
 			if listener == nil {
 				return
 			}
-			
+
 			conn, err := listener.Accept()
 			if err != nil {
 				select {
@@ -337,7 +337,7 @@ type ConnectionHandler struct {
 }
 
 // NewConnectionPool creates a connection handler
-func NewConnectionPool(ctx context.Context, maxConnections int, handler func(context.Context, net.Conn) error, logger Logger) *ConnectionHandler {
+func NewConnectionPool(_ context.Context, maxConnections int, handler func(context.Context, net.Conn) error, logger Logger) *ConnectionHandler {
 	return &ConnectionHandler{
 		handler: handler,
 		logger:  logger,
@@ -412,7 +412,7 @@ func NewAuthManager(configPath string, logger Logger) (*AuthManager, error) {
 }
 
 // ValidateToken validates a token (for local use)
-func (a *AuthManager) ValidateToken(token string) bool {
+func (a *AuthManager) ValidateToken(_ string) bool {
 	// For local development, just check if daemon is running by same user
 	_, err := os.Stat(a.pidFile)
 	return err == nil
@@ -495,7 +495,7 @@ func (t *TLSManager) GetTLSConfig() (*tls.Config, error) {
 // GetClientTLSConfig returns client TLS config
 func (t *TLSManager) GetClientTLSConfig() (*tls.Config, error) {
 	return &tls.Config{
-		InsecureSkipVerify: true, // For localhost self-signed cert
+		InsecureSkipVerify: true, // #nosec G402 - localhost self-signed cert
 		ServerName:         "localhost",
 		MinVersion:         tls.VersionTLS12,
 	}, nil

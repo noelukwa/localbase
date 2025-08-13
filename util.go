@@ -28,9 +28,13 @@ type Field struct {
 type LogLevel int
 
 const (
+	// DebugLevel logs all messages
 	DebugLevel LogLevel = iota
+	// InfoLevel logs info, error, and fatal messages
 	InfoLevel
+	// ErrorLevel logs error and fatal messages
 	ErrorLevel
+	// FatalLevel logs only fatal messages
 	FatalLevel
 )
 
