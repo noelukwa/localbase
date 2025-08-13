@@ -71,8 +71,7 @@ linters:
     - unconvert        # Remove unnecessary type conversions
     - wastedassign     # Find assignments to existing variables that are not used
     
-  disable:
-    # No linters to disable
+  disable: []
 
 # Issues configuration
 issues:
