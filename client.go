@@ -214,11 +214,8 @@ func (c *CaddyClientImpl) IsRunning(ctx context.Context) (bool, error) {
 	return resp.StatusCode == http.StatusOK, nil
 }
 
-// AddServerBlock adds a new server block for the given domains
+// AddServerBlock adds a new route to the main HTTPS server
 func (c *CaddyClientImpl) AddServerBlock(ctx context.Context, domains []string, port int) error {
-	// Prepare the server block
-	serverBlock := createServerBlock(domains, port)
-
 	// Get current config
 	config, err := c.GetConfig(ctx)
 	if err != nil {
@@ -249,15 +246,37 @@ func (c *CaddyClientImpl) AddServerBlock(ctx context.Context, domains []string, 
 		httpApp["servers"] = servers
 	}
 
-	// Add the new server block
-	serverID := fmt.Sprintf("srv_%s", domains[0])
-	servers[serverID] = serverBlock
+	// Use a single server for all HTTPS traffic
+	mainServerID := "localbase_https"
+	mainServer, ok := servers[mainServerID].(map[string]any)
+	if !ok {
+		// Create the main server if it doesn't exist
+		mainServer = map[string]any{
+			"listen": []any{":443"},
+			"routes": []any{},
+			"automatic_https": map[string]any{
+				"disable_redirects": false,
+			},
+		}
+		servers[mainServerID] = mainServer
+	}
+
+	// Get or create routes array
+	routes, ok := mainServer["routes"].([]any)
+	if !ok {
+		routes = []any{}
+	}
+
+	// Create new route for these domains
+	newRoute := createRoute(domains, port)
+	routes = append(routes, newRoute)
+	mainServer["routes"] = routes
 
 	// Update the config
 	return c.UpdateConfig(ctx, config)
 }
 
-// RemoveServerBlock removes server blocks for the given domains
+// RemoveServerBlock removes routes for the given domains
 func (c *CaddyClientImpl) RemoveServerBlock(ctx context.Context, domains []string) error {
 	config, err := c.GetConfig(ctx)
 	if err != nil {
@@ -266,7 +285,20 @@ func (c *CaddyClientImpl) RemoveServerBlock(ctx context.Context, domains []strin
 
 	servers := c.getServers(config)
 	if servers == nil {
-		return nil // No servers to remove
+		return nil // No servers to remove from
+	}
+
+	// Find the main server
+	mainServerID := "localbase_https"
+	mainServer, ok := servers[mainServerID].(map[string]any)
+	if !ok {
+		return nil // Main server doesn't exist
+	}
+
+	// Get routes
+	routes, ok := mainServer["routes"].([]any)
+	if !ok || len(routes) == 0 {
+		return nil // No routes to remove
 	}
 
 	// Create a set of domains for fast lookup
@@ -275,13 +307,15 @@ func (c *CaddyClientImpl) RemoveServerBlock(ctx context.Context, domains []strin
 		domainSet[d] = true
 	}
 
-	// Find and remove matching server blocks
-	for serverID, server := range servers {
-		if c.serverContainsDomain(server, domainSet) {
-			delete(servers, serverID)
+	// Filter out routes that match the domains
+	var filteredRoutes []any
+	for _, route := range routes {
+		if !c.routeContainsDomain(route, domainSet) {
+			filteredRoutes = append(filteredRoutes, route)
 		}
 	}
 
+	mainServer["routes"] = filteredRoutes
 	return c.UpdateConfig(ctx, config)
 }
 
@@ -303,27 +337,6 @@ func (c *CaddyClientImpl) getServers(config map[string]any) map[string]any {
 	}
 
 	return servers
-}
-
-// serverContainsDomain checks if server contains any of the domains
-func (c *CaddyClientImpl) serverContainsDomain(server any, domainSet map[string]bool) bool {
-	serverConfig, ok := server.(map[string]any)
-	if !ok {
-		return false
-	}
-
-	routes, ok := serverConfig["routes"].([]any)
-	if !ok || len(routes) == 0 {
-		return false
-	}
-
-	for _, route := range routes {
-		if c.routeContainsDomain(route, domainSet) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // routeContainsDomain checks if route contains any of the domains
@@ -359,23 +372,27 @@ func (c *CaddyClientImpl) routeContainsDomain(route any, domainSet map[string]bo
 	return false
 }
 
-// ClearAllServerBlocks removes all server blocks
+// ClearAllServerBlocks removes all routes from the main server
 func (c *CaddyClientImpl) ClearAllServerBlocks(ctx context.Context) error {
 	config, err := c.GetConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current config: %w", err)
 	}
 
-	// Check if there are any apps configured
-	apps, ok := config["apps"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("invalid config structure: apps not found")
+	servers := c.getServers(config)
+	if servers == nil {
+		return nil // No servers to clear
 	}
 
-	// Clear the http app servers
-	if httpApp, ok := apps["http"].(map[string]any); ok {
-		httpApp["servers"] = make(map[string]any)
+	// Find the main server
+	mainServerID := "localbase_https"
+	mainServer, ok := servers[mainServerID].(map[string]any)
+	if !ok {
+		return nil // Main server doesn't exist
 	}
+
+	// Clear all routes
+	mainServer["routes"] = []any{}
 
 	return c.UpdateConfig(ctx, config)
 }
@@ -494,8 +511,8 @@ func (c *CaddyClientImpl) EnsureRunning(ctx context.Context) error {
 	return nil
 }
 
-// createServerBlock creates a server block configuration for Caddy
-func createServerBlock(domains []string, port int) map[string]any {
+// createRoute creates a route configuration for Caddy
+func createRoute(domains []string, port int) map[string]any {
 	// Convert domains to interface slice
 	hostList := make([]any, len(domains))
 	for i, domain := range domains {
@@ -503,35 +520,20 @@ func createServerBlock(domains []string, port int) map[string]any {
 	}
 
 	return map[string]any{
-		"listen": []any{":443"},
-		"routes": []any{
+		"match": []any{
 			map[string]any{
-				"match": []any{
+				"host": hostList,
+			},
+		},
+		"handle": []any{
+			map[string]any{
+				"handler": "reverse_proxy",
+				"upstreams": []any{
 					map[string]any{
-						"host": hostList,
-					},
-				},
-				"handle": []any{
-					map[string]any{
-						"handler": "reverse_proxy",
-						"upstreams": []any{
-							map[string]any{
-								"dial": fmt.Sprintf("localhost:%d", port),
-							},
-						},
+						"dial": fmt.Sprintf("localhost:%d", port),
 					},
 				},
 			},
-		},
-		"tls_connection_policies": []any{
-			map[string]any{
-				"match": map[string]any{
-					"sni": hostList,
-				},
-			},
-		},
-		"automatic_https": map[string]any{
-			"disable_redirects": false,
 		},
 	}
 }
