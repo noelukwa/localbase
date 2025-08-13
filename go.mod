@@ -2,14 +2,10 @@ module github.com/noelukwa/localbase
 
 go 1.23.0
 
-toolchain go1.24.1
-
 require (
 	github.com/charmbracelet/bubbletea v1.3.6
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/hashicorp/mdns v1.0.6
-	github.com/mitchellh/go-homedir v1.1.0
-	github.com/oleksandr/bonjour v0.0.0-20210301155756-30f43c61b915
 	github.com/spf13/cobra v1.8.1
 )
 
