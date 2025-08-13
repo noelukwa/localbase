@@ -69,10 +69,7 @@ func (c *Client) SendCommand(method string, params map[string]any) error {
 	}
 
 	// Get TLS configuration
-	tlsConfig, err := c.tlsManager.GetClientTLSConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get TLS config: %w", err)
-	}
+	tlsConfig := c.tlsManager.GetClientTLSConfig()
 
 	// Connect with TLS
 	conn, err := tls.Dial("tcp", c.config.AdminAddress, tlsConfig)
@@ -262,49 +259,99 @@ func (c *CaddyClientImpl) RemoveServerBlock(ctx context.Context, domains []strin
 		return fmt.Errorf("failed to get current config: %w", err)
 	}
 
-	// Navigate to the servers
-	apps, ok := config["apps"].(map[string]any)
-	if !ok {
-		return nil // No apps, nothing to remove
+	servers := c.getServers(config)
+	if servers == nil {
+		return nil // No servers to remove
 	}
 
-	httpApp, ok := apps["http"].(map[string]any)
-	if !ok {
-		return nil // No http app, nothing to remove
-	}
-
-	servers, ok := httpApp["servers"].(map[string]any)
-	if !ok {
-		return nil // No servers, nothing to remove
+	// Create a set of domains for fast lookup
+	domainSet := make(map[string]bool)
+	for _, d := range domains {
+		domainSet[d] = true
 	}
 
 	// Find and remove matching server blocks
 	for serverID, server := range servers {
-		if serverConfig, ok := server.(map[string]any); ok {
-			if routes, ok := serverConfig["routes"].([]any); ok && len(routes) > 0 {
-				if route, ok := routes[0].(map[string]any); ok {
-					if matchList, ok := route["match"].([]any); ok && len(matchList) > 0 {
-						if match, ok := matchList[0].(map[string]any); ok {
-							if hosts, ok := match["host"].([]any); ok {
-								// Check if this server block contains any of our domains
-								for _, domain := range domains {
-									for _, host := range hosts {
-										if hostStr, ok := host.(string); ok && hostStr == domain {
-											delete(servers, serverID)
-											goto nextServer
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+		if c.serverContainsDomain(server, domainSet) {
+			delete(servers, serverID)
 		}
-	nextServer:
 	}
 
 	return c.UpdateConfig(ctx, config)
+}
+
+// getServers extracts servers from config
+func (c *CaddyClientImpl) getServers(config map[string]any) map[string]any {
+	apps, ok := config["apps"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	httpApp, ok := apps["http"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	servers, ok := httpApp["servers"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	return servers
+}
+
+// serverContainsDomain checks if server contains any of the domains
+func (c *CaddyClientImpl) serverContainsDomain(server any, domainSet map[string]bool) bool {
+	serverConfig, ok := server.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	routes, ok := serverConfig["routes"].([]any)
+	if !ok || len(routes) == 0 {
+		return false
+	}
+
+	for _, route := range routes {
+		if c.routeContainsDomain(route, domainSet) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// routeContainsDomain checks if route contains any of the domains
+func (c *CaddyClientImpl) routeContainsDomain(route any, domainSet map[string]bool) bool {
+	routeMap, ok := route.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	matchList, ok := routeMap["match"].([]any)
+	if !ok || len(matchList) == 0 {
+		return false
+	}
+
+	for _, match := range matchList {
+		matchMap, ok := match.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		hosts, ok := matchMap["host"].([]any)
+		if !ok {
+			continue
+		}
+
+		for _, host := range hosts {
+			if hostStr, ok := host.(string); ok && domainSet[hostStr] {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // ClearAllServerBlocks removes all server blocks
@@ -530,7 +577,8 @@ func (m *spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
 		m.spinner++
-		return m, m.tick()
+		cmd := m.tick()
+		return m, cmd
 	case doneMsg:
 		m.err = msg.err
 		return m, tea.Quit

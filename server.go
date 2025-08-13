@@ -337,7 +337,7 @@ type ConnectionHandler struct {
 }
 
 // NewConnectionPool creates a connection handler
-func NewConnectionPool(_ context.Context, maxConnections int, handler func(context.Context, net.Conn) error, logger Logger) *ConnectionHandler {
+func NewConnectionPool(_ context.Context, _ int, handler func(context.Context, net.Conn) error, logger Logger) *ConnectionHandler {
 	return &ConnectionHandler{
 		handler: handler,
 		logger:  logger,
@@ -493,12 +493,12 @@ func (t *TLSManager) GetTLSConfig() (*tls.Config, error) {
 }
 
 // GetClientTLSConfig returns client TLS config
-func (t *TLSManager) GetClientTLSConfig() (*tls.Config, error) {
+func (t *TLSManager) GetClientTLSConfig() *tls.Config {
 	return &tls.Config{
 		InsecureSkipVerify: true, // #nosec G402 - localhost self-signed cert
 		ServerName:         "localhost",
 		MinVersion:         tls.VersionTLS12,
-	}, nil
+	}
 }
 
 // certificateExists checks if certificate files exist

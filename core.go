@@ -310,7 +310,7 @@ func (l *LocalBase) Shutdown(ctx context.Context) error {
 }
 
 // registerMDNS registers the domain with mDNS
-func (l *LocalBase) registerMDNS(ctx context.Context, domain string, port int) error {
+func (l *LocalBase) registerMDNS(_ context.Context, domain string, port int) error {
 	// Get current IP address
 	l.ipMu.RLock()
 	ip := l.localIP
