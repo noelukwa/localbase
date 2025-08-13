@@ -92,7 +92,7 @@ brews:
     repository:
       owner: noelukwa
       name: homebrew-tap
-    folder: Formula
+    directory: Formula
     homepage: https://github.com/noelukwa/localbase
     description: "A secure, lightweight tool for provisioning .local domains with automatic HTTPS support"
     license: MIT
