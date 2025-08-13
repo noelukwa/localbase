@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -156,6 +158,13 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version number of localbase",
 	Run: func(cmd *cobra.Command, args []string) {
+		// If version is still "dev", try to get it from build info
+		if version == "dev" {
+			if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+				version = info.Main.Version
+			}
+		}
+		
 		fmt.Printf("LocalBase %s\n", version)
 		fmt.Printf("  commit: %s\n", commit)
 		fmt.Printf("  built: %s\n", date)
