@@ -1,0 +1,120 @@
+# Configuration for golangci-lint
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  go: "1.21"
+  modules-download-mode: readonly
+
+# Settings for specific linters
+linters-settings:
+  gofumpt:
+    # Choose whether to use the extra rules that are disabled by default
+    extra-rules: true
+  
+  gocyclo:
+    # Minimal code complexity to report
+    min-complexity: 15
+    
+  govet:
+    enable:
+      - shadow
+    
+  misspell:
+    locale: US
+    
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+      - experimental
+    disabled-checks:
+      - whyNoLint
+      - wrapperFunc
+      - dupImport # https://github.com/go-critic/go-critic/issues/845
+      - ifElseChain
+      - octalLiteral
+      - hugeParam
+      
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+      - name: unexported-return
+        disabled: false
+      - name: unused-parameter
+        disabled: false
+
+# Enable specific linters
+linters:
+  enable:
+    - errcheck         # Check for unchecked errors
+    - gosimple         # Simplify code
+    - govet            # Vet examines Go source code
+    - ineffassign      # Detect ineffectual assignments
+    - staticcheck      # Go static analysis
+    - typecheck        # Parse and type-check Go code
+    - unused           # Check for unused constants, variables, functions and types
+    - gofumpt          # Stricter gofmt
+    - misspell         # Correct commonly misspelled English words
+    - gocritic         # Comprehensive Go source code linter
+    - gocyclo          # Computes cyclomatic complexity
+    - unparam          # Find unused function parameters
+    - revive           # Replacement for golint
+    - goimports        # Fix imports and format code
+    - gosec            # Security-focused linter
+    - bodyclose        # Check HTTP response body is closed
+    - nilerr           # Check returning nil even if error is not nil
+    - rowserrcheck     # Check SQL rows.Err is checked
+    - sqlclosecheck    # Check SQL database/sql.Rows and sql.Stmt are closed
+    - unconvert        # Remove unnecessary type conversions
+    - wastedassign     # Find assignments to existing variables that are not used
+    
+  disable: []
+
+# Issues configuration
+issues:
+  # Maximum count of issues with the same text. Set to 0 to disable.
+  max-same-issues: 50
+  
+  # Maximum issues count per one linter. Set to 0 to disable.
+  max-issues-per-linter: 0
+  
+  # Exclude following linters from requiring issues to be fixed
+  exclude-use-default: false
+  
+  # List of regexps of issue texts to exclude
+  exclude:
+    # Allow shadowing of 'err' variable
+    - 'shadow: declaration of "err" shadows declaration'
+    # Allow unused parameters in interface implementations
+    - 'unused-parameter: parameter .* seems to be unused, consider removing or renaming it as _'
+    
+  # Exclude specific issues by file patterns
+  exclude-rules:
+    # Exclude lll issues for long lines in test files
+    - path: _test\.go
+      linters:
+        - lll
+        - funlen
+        - gocognit
+        - gocyclo
+    
+    # Exclude specific rules for generated files
+    - path: ".*\\.pb\\.go$"
+      linters:
+        - all
+        
+    # Allow init functions in main package
+    - path: main\.go
+      text: "should not use init function"
+      linters:
+        - gochecknoinits
+
+# Output configuration
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true

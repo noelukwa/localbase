@@ -1,8 +1,12 @@
 version: 2
 
+project_name: localbase
+
 before:
   hooks:
     - go mod tidy
+    - go generate ./...
+    - go test ./...
     - sed -i 's/VERSION="v0.0.0"/VERSION="{{.Version}}"/g' install.sh
 
 builds:
@@ -14,11 +18,13 @@ builds:
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: linux
-        goarch: arm64
+    # Enable all combinations including linux arm64
+    ignore: []
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
 
 archives:
   - format: tar.gz
@@ -29,6 +35,13 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - install.sh
 
 checksum:
   name_template: 'checksums.txt'
@@ -38,3 +51,58 @@ snapshot:
 
 changelog:
   sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: noelukwa
+    name: localbase
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## LocalBase {{.Tag}} ({{.Date}})
+    
+    Welcome to this new release!
+  footer: |
+    ## Installation
+    
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/noelukwa/localbase/main/install.sh | sudo sh\n    ```\n    \n    **Homebrew:**\n    ```bash\n    brew tap noelukwa/tap && brew install localbase
+    ```
+    
+    **Full Changelog**: https://github.com/noelukwa/localbase/compare/{{.PreviousTag}}...{{.Tag}}
+
+brews:
+  - name: localbase
+    repository:
+      owner: noelukwa
+      name: homebrew-tap
+    folder: Formula
+    homepage: https://github.com/noelukwa/localbase
+    description: "A secure, lightweight tool for provisioning .local domains with automatic HTTPS support"
+    license: MIT
+    test: |
+      system "#{bin}/localbase version"
+    install: |
+      bin.install "localbase"
+
+# Package managers removed - overkill for local dev tool
+# Developers can use: brew, go install, or direct binary download
+    
+# Docker removed - LocalBase requires host network access for mDNS/.local domains
+# and direct interaction with host's Caddy server, making containerization impractical
