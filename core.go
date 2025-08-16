@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/mdns"
+	"github.com/oleksandr/bonjour"
 )
 
 // ConfigManager handles configuration persistence
@@ -158,7 +158,7 @@ type LocalBase struct {
 	validator   Validator
 	domainsmu   sync.RWMutex
 	domains     map[string]*domainEntry
-	mdnsServers map[string]*mdns.Server
+	mdnsServers map[string]*bonjour.Server
 	mdnsMu      sync.RWMutex
 	localIP     net.IP
 	ipMu        sync.RWMutex
@@ -180,7 +180,7 @@ func NewLocalBase(logger Logger, _ *ConfigManager, caddyClient CaddyClient, vali
 		caddyClient: caddyClient,
 		validator:   validator,
 		domains:     make(map[string]*domainEntry),
-		mdnsServers: make(map[string]*mdns.Server),
+		mdnsServers: make(map[string]*bonjour.Server),
 		localIP:     localIP,
 	}, nil
 }
@@ -263,14 +263,17 @@ func (l *LocalBase) Remove(ctx context.Context, domain string) error {
 	return nil
 }
 
-// List returns all registered domains
-func (l *LocalBase) List(ctx context.Context) ([]string, error) {
+// List returns all registered domains with their ports
+func (l *LocalBase) List(ctx context.Context) ([]DomainInfo, error) {
 	l.domainsmu.RLock()
 	defer l.domainsmu.RUnlock()
 
-	domains := make([]string, 0, len(l.domains))
-	for domain := range l.domains {
-		domains = append(domains, domain)
+	domains := make([]DomainInfo, 0, len(l.domains))
+	for domain, entry := range l.domains {
+		domains = append(domains, DomainInfo{
+			Domain: domain,
+			Port:   entry.port,
+		})
 	}
 
 	return domains, nil
@@ -285,11 +288,10 @@ func (l *LocalBase) Shutdown(ctx context.Context) error {
 	// Unregister all mDNS services
 	l.mdnsMu.Lock()
 	for domain, server := range l.mdnsServers {
-		if err := server.Shutdown(); err != nil {
-			errors = append(errors, fmt.Sprintf("failed to shutdown mDNS for %s: %v", domain, err))
-		}
+		server.Shutdown()
+		l.logger.Info("mDNS server shutdown", Field{"domain", domain})
 	}
-	l.mdnsServers = make(map[string]*mdns.Server)
+	l.mdnsServers = make(map[string]*bonjour.Server)
 	l.mdnsMu.Unlock()
 
 	// Clear all Caddy server blocks
@@ -309,7 +311,7 @@ func (l *LocalBase) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// registerMDNS registers the domain with mDNS
+// registerMDNS registers the domain with mDNS using Bonjour
 func (l *LocalBase) registerMDNS(_ context.Context, domain string, port int) error {
 	// Get current IP address
 	l.ipMu.RLock()
@@ -318,25 +320,21 @@ func (l *LocalBase) registerMDNS(_ context.Context, domain string, port int) err
 
 	// Remove .local suffix for mDNS
 	hostname := strings.TrimSuffix(domain, ".local")
+	fullHost := fmt.Sprintf("%s.local.", hostname)
+	service := fmt.Sprintf("_%s._tcp", hostname)
 
-	// Create mDNS service
-	service, err := mdns.NewMDNSService(
-		hostname,
-		"_http._tcp",
+	// Register service using Bonjour with network IP for cross-device access
+	server, err := bonjour.RegisterProxy(
+		"localbase",
+		service,
 		"",
-		"",
-		port,
-		[]net.IP{ip},
-		[]string{"LocalBase managed domain"},
-	)
+		80, // mDNS advertised port
+		fullHost,
+		ip.String(), // Use actual network IP for cross-device access
+		[]string{fmt.Sprintf("LocalBase managed domain port=%d", port)},
+		nil)
 	if err != nil {
-		return fmt.Errorf("failed to create mDNS service: %w", err)
-	}
-
-	// Create mDNS server
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
-	if err != nil {
-		return fmt.Errorf("failed to create mDNS server: %w", err)
+		return fmt.Errorf("failed to register mDNS service: %w", err)
 	}
 
 	// Store server reference
@@ -354,17 +352,15 @@ func (l *LocalBase) unregisterMDNS(domain string) {
 	defer l.mdnsMu.Unlock()
 
 	if server, exists := l.mdnsServers[domain]; exists {
-		if err := server.Shutdown(); err != nil {
-			l.logger.Error("failed to shutdown mDNS server", Field{"domain", domain}, Field{"error", err})
-		}
+		server.Shutdown()
 		delete(l.mdnsServers, domain)
 		l.logger.Info("mDNS service unregistered", Field{"domain", domain})
 	}
 }
 
-// startBroadcast periodically updates the IP address and refreshes mDNS
+// startBroadcast periodically refreshes mDNS services to keep them alive
 func (l *LocalBase) startBroadcast(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -372,6 +368,10 @@ func (l *LocalBase) startBroadcast(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Always refresh mDNS services to prevent them from expiring
+			l.refreshAllMDNS(ctx)
+
+			// Also check for IP changes
 			newIP, err := getLocalIP()
 			if err != nil {
 				l.logger.Error("failed to get local IP", Field{"error", err})
@@ -384,7 +384,7 @@ func (l *LocalBase) startBroadcast(ctx context.Context) {
 				l.localIP = newIP
 				l.ipMu.Unlock()
 				l.logger.Info("IP address changed", Field{"old", oldIP.String()}, Field{"new", newIP.String()})
-				l.refreshAllMDNS(ctx)
+				// mDNS already refreshed above, so no need to call refreshAllMDNS again
 			} else {
 				l.ipMu.Unlock()
 			}
@@ -409,9 +409,78 @@ func (l *LocalBase) refreshAllMDNS(ctx context.Context) {
 	}
 }
 
-// getLocalIP returns the local IP address
+// getLocalIP returns the local network IP address, preferring main network interfaces
 func getLocalIP() (net.IP, error) {
-	// Try to connect to a public DNS server to determine local IP
+	// First, try to get IP from network interfaces
+	if ip, err := getIPFromInterfaces(); err == nil {
+		return ip, nil
+	}
+
+	// Fallback: Try to connect to a public DNS server to determine local IP
+	return getIPFromConnection()
+}
+
+// getIPFromInterfaces tries to get IP from network interfaces
+func getIPFromInterfaces() (net.IP, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, iface := range interfaces {
+		if ip, err := getIPFromInterface(iface); err == nil {
+			return ip, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no suitable interface found")
+}
+
+// getIPFromInterface extracts IP from a single interface
+func getIPFromInterface(iface net.Interface) (net.IP, error) {
+	// Skip loopback and down interfaces
+	if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+		return nil, fmt.Errorf("interface %s not suitable", iface.Name)
+	}
+
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, addr := range addrs {
+		if ip := extractPrivateIPv4(addr); ip != nil {
+			return ip, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no suitable IP found on interface %s", iface.Name)
+}
+
+// extractPrivateIPv4 extracts private IPv4 addresses from an address
+func extractPrivateIPv4(addr net.Addr) net.IP {
+	var ip net.IP
+	switch v := addr.(type) {
+	case *net.IPNet:
+		ip = v.IP
+	case *net.IPAddr:
+		ip = v.IP
+	}
+
+	// Prefer IPv4 addresses in private ranges (192.168.x.x, 10.x.x.x)
+	if ip != nil && ip.To4() != nil && !ip.IsLoopback() && ip.IsPrivate() {
+		// Convert to 4-byte representation to check first byte correctly
+		ipv4 := ip.To4()
+		if ipv4[0] == 192 || ipv4[0] == 10 {
+			return ip
+		}
+	}
+
+	return nil
+}
+
+// getIPFromConnection uses UDP connection to determine local IP
+func getIPFromConnection() (net.IP, error) {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine local IP: %w", err)
@@ -429,7 +498,6 @@ type DomainValidator struct {
 
 // NewValidator creates a new validator instance
 func NewValidator() *DomainValidator {
-	// Modified regex to support domain names with dots for local development
 	domainRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
 	return &DomainValidator{
 		domainRegex: domainRegex,

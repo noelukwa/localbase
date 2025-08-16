@@ -121,11 +121,17 @@ func ParseLogLevel(level string) LogLevel {
 
 // Interfaces
 
+// DomainInfo represents a domain with its port
+type DomainInfo struct {
+	Domain string
+	Port   int
+}
+
 // DomainService manages domain registrations
 type DomainService interface {
 	Add(ctx context.Context, domain string, port int) error
 	Remove(ctx context.Context, domain string) error
-	List(ctx context.Context) ([]string, error)
+	List(ctx context.Context) ([]DomainInfo, error)
 	Shutdown(ctx context.Context) error
 }
 
