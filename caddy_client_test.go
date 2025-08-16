@@ -198,15 +198,15 @@ func TestCaddyClientAddServerBlock(t *testing.T) {
 				t.Error("Expected servers in http app")
 			}
 
-			serverID := "srv_test.local"
-			defaultServer, ok := servers[serverID].(map[string]any)
+			serverID := "localbase_https"
+			mainServer, ok := servers[serverID].(map[string]any)
 			if !ok {
 				t.Errorf("Expected server with ID %s", serverID)
 			}
 
-			routes, ok := defaultServer["routes"].([]any)
+			routes, ok := mainServer["routes"].([]any)
 			if !ok {
-				t.Error("Expected routes in default server")
+				t.Error("Expected routes in main server")
 			}
 
 			if len(routes) != 1 {

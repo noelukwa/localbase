@@ -309,10 +309,9 @@ func (h *ProtocolHandler) processCommand(command string) string {
 			return "OK: no domains configured"
 		}
 
-		// Format domains as simple list
 		var domainList []string
 		for _, d := range domains {
-			domainList = append(domainList, fmt.Sprintf("%s -> localhost:%d", d, 0)) // Port info not stored
+			domainList = append(domainList, fmt.Sprintf("%s -> localhost:%d", d.Domain, d.Port))
 		}
 		return fmt.Sprintf("OK: %s", strings.Join(domainList, ", "))
 
