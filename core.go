@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oleksandr/bonjour"
+	"github.com/brutella/dnssd"
 )
 
 // ConfigManager handles configuration persistence
@@ -158,7 +158,7 @@ type LocalBase struct {
 	validator   Validator
 	domainsmu   sync.RWMutex
 	domains     map[string]*domainEntry
-	mdnsServers map[string]*bonjour.Server
+	mdnsCancel  map[string]context.CancelFunc
 	mdnsMu      sync.RWMutex
 	localIP     net.IP
 	ipMu        sync.RWMutex
@@ -180,7 +180,7 @@ func NewLocalBase(logger Logger, _ *ConfigManager, caddyClient CaddyClient, vali
 		caddyClient: caddyClient,
 		validator:   validator,
 		domains:     make(map[string]*domainEntry),
-		mdnsServers: make(map[string]*bonjour.Server),
+		mdnsCancel: make(map[string]context.CancelFunc),
 		localIP:     localIP,
 	}, nil
 }
@@ -287,11 +287,11 @@ func (l *LocalBase) Shutdown(ctx context.Context) error {
 
 	// Unregister all mDNS services
 	l.mdnsMu.Lock()
-	for domain, server := range l.mdnsServers {
-		server.Shutdown()
+	for domain, cancel := range l.mdnsCancel {
+		cancel()
 		l.logger.Info("mDNS server shutdown", Field{"domain", domain})
 	}
-	l.mdnsServers = make(map[string]*bonjour.Server)
+	l.mdnsCancel = make(map[string]context.CancelFunc)
 	l.mdnsMu.Unlock()
 
 	// Clear all Caddy server blocks
@@ -311,8 +311,8 @@ func (l *LocalBase) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// registerMDNS registers the domain with mDNS using Bonjour
-func (l *LocalBase) registerMDNS(_ context.Context, domain string, port int) error {
+// registerMDNS registers the domain with mDNS using dnssd
+func (l *LocalBase) registerMDNS(ctx context.Context, domain string, port int) error {
 	// Get current IP address
 	l.ipMu.RLock()
 	ip := l.localIP
@@ -320,25 +320,42 @@ func (l *LocalBase) registerMDNS(_ context.Context, domain string, port int) err
 
 	// Remove .local suffix for mDNS
 	hostname := strings.TrimSuffix(domain, ".local")
-	fullHost := fmt.Sprintf("%s.local.", hostname)
 	service := fmt.Sprintf("_%s._tcp", hostname)
 
-	server, err := bonjour.RegisterProxy(
-		"localbase",
-		service,
-		"",
-		80,
-		fullHost,
-		ip.String(),
-		[]string{fmt.Sprintf("LocalBase managed domain port=%d", port)},
-		nil)
-	if err != nil {
-		return fmt.Errorf("failed to register mDNS service: %w", err)
+	cfg := dnssd.Config{
+		Name:   "localbase",
+		Type:   service,
+		Domain: "local",
+		Host:   hostname,
+		Port:   80,
+		IPs:    []net.IP{ip},
+		Text: map[string]string{
+			"info": fmt.Sprintf("LocalBase managed domain port=%d", port),
+		},
 	}
 
-	// Store server reference
+	sv, err := dnssd.NewService(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create mDNS service: %w", err)
+	}
+
+	rp, err := dnssd.NewResponder()
+	if err != nil {
+		return fmt.Errorf("failed to create mDNS responder: %w", err)
+	}
+
+	if _, err := rp.Add(sv); err != nil {
+		return fmt.Errorf("failed to add mDNS service: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		_ = rp.Respond(ctx)
+	}()
+
+	// Store cancel function
 	l.mdnsMu.Lock()
-	l.mdnsServers[domain] = server
+	l.mdnsCancel[domain] = cancel
 	l.mdnsMu.Unlock()
 
 	l.logger.Info("mDNS service registered", Field{"domain", domain}, Field{"ip", ip.String()})
@@ -350,9 +367,9 @@ func (l *LocalBase) unregisterMDNS(domain string) {
 	l.mdnsMu.Lock()
 	defer l.mdnsMu.Unlock()
 
-	if server, exists := l.mdnsServers[domain]; exists {
-		server.Shutdown()
-		delete(l.mdnsServers, domain)
+	if cancel, exists := l.mdnsCancel[domain]; exists {
+		cancel()
+		delete(l.mdnsCancel, domain)
 		l.logger.Info("mDNS service unregistered", Field{"domain", domain})
 	}
 }
