@@ -180,7 +180,7 @@ func NewLocalBase(logger Logger, _ *ConfigManager, caddyClient CaddyClient, vali
 		caddyClient: caddyClient,
 		validator:   validator,
 		domains:     make(map[string]*domainEntry),
-		mdnsCancel: make(map[string]context.CancelFunc),
+		mdnsCancel:  make(map[string]context.CancelFunc),
 		localIP:     localIP,
 	}, nil
 }
