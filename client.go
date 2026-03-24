@@ -419,6 +419,8 @@ func (c *CaddyClientImpl) StartCaddy(ctx context.Context) error {
 	// Prepare the command with security in mind
 	cmd := exec.CommandContext(ctx, caddyPath, "run", "--config", "/dev/null", "--adapter", "json", "--watch") // #nosec G204
 	cmd.Env = append(cmd.Env, "HOME="+getHomeDir())
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 
 	// Start Caddy in background
 	if err := cmd.Start(); err != nil {
